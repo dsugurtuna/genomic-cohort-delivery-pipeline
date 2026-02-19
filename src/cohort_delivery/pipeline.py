@@ -16,7 +16,7 @@ Author: Ugur Tuna
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from cohort_delivery.filter import CohortFilter, FilterReport
 from cohort_delivery.manifest import DeliveryManifest, ManifestGenerator

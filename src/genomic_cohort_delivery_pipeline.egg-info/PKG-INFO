@@ -1,0 +1,163 @@
+Metadata-Version: 2.4
+Name: genomic-cohort-delivery-pipeline
+Version: 2.0.0
+Summary: Assemble, correct, and securely deliver large-scale genomic cohorts from multi-batch biobank data.
+Author: Ugur Tuna
+License: MIT
+Keywords: genomics,cohort,plink,bioinformatics,delivery
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Science/Research
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Scientific/Engineering :: Bio-Informatics
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0; extra == "dev"
+Requires-Dist: ruff>=0.1; extra == "dev"
+
+# Genomic Cohort Delivery Pipeline
+
+[![CI](https://github.com/dsugurtuna/genomic-cohort-delivery-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/dsugurtuna/genomic-cohort-delivery-pipeline/actions)
+[![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/)
+[![PLINK](https://img.shields.io/badge/Tool-PLINK%201.9-red)](https://www.cog-genomics.org/plink/)
+[![Portfolio](https://img.shields.io/badge/Status-Portfolio_Project-purple.svg)]()
+
+An industrial-grade pipeline for assembling, correcting, and securely delivering large-scale genomic cohorts from multi-batch biobank data.
+
+> **Portfolio disclaimer:** This repository contains sanitised, generalised versions of workflows developed at NIHR BioResource. No real participant data, internal paths, or infrastructure details are included. All examples use synthetic data.
+
+---
+
+## Architecture
+
+```text
+Exclusion Lists ─┐
+                  ├──> CohortFilter ──> Filtered Sample List
+Cohort Sample List┘                            │
+                                               v
+Batch 1 (.bed/.bim/.fam) ─┐                   │
+Batch 2 (.bed/.bim/.fam) ──┼──> GenotypeMerger ──> Merged PLINK / VCF
+Batch N (.bed/.bim/.fam) ─┘  (auto-correction)     │
+                                                    v
+                                       ManifestGenerator ──> MANIFEST.tsv
+                                                    │           STATUS.tsv
+                                                    v
+                                           SecureTransfer ──> Researcher Staging
+```
+
+## Key Capabilities
+
+### Automated Conflict Resolution
+
+Merging genotypes from different array batches often fails due to strand (flip) errors. The `GenotypeMerger` implements a **self-healing workflow**:
+
+1. Attempts a merge across all batches.
+2. Catches PLINK merge failures.
+3. Parses the `.missnp` log to identify conflicting variants.
+4. Re-extracts data excluding those variants.
+5. Re-merges the cleaned data successfully.
+
+### Data Governance
+
+- **Exclusion filtering** — withdrawn participants are never included in a delivery (GDPR / bioethics compliance).
+- **Manifest generation** — every delivery includes MD5 and SHA-256 checksums for integrity verification.
+- **Permission-controlled transfer** — rsync with explicit `chmod` directives.
+
+## Repository Structure
+
+```text
+.
+├── src/cohort_delivery/          Python package
+│   ├── __init__.py
+│   ├── filter.py                 Cohort exclusion filtering
+│   ├── merge.py                  Multi-batch merge with auto-correction
+│   ├── manifest.py               Checksum manifest generator
+│   ├── transfer.py               Secure rsync/copy transfer
+│   └── pipeline.py               End-to-end orchestrator
+├── tests/                        Pytest test suite
+│   ├── test_filter.py
+│   ├── test_manifest.py
+│   └── test_transfer.py
+├── legacy/                       Original shell scripts
+│   ├── filter_cohort_samples.sh
+│   ├── merge_and_correct_genotypes.sh
+│   ├── generate_delivery_manifest.sh
+│   └── secure_transfer_protocol.sh
+├── .github/workflows/ci.yml     CI pipeline
+├── pyproject.toml
+├── Dockerfile
+├── Makefile
+└── README.md
+```
+
+## Quick Start
+
+```bash
+pip install -e ".[dev]"
+```
+
+### Python API
+
+```python
+from cohort_delivery import DeliveryPipeline
+from cohort_delivery.pipeline import PipelineConfig
+
+config = PipelineConfig(
+    project_id="NBR030",
+    cohort_file="cohort_all_samples.txt",
+    exclusion_files=["exclusion_list_gender_mismatch.csv"],
+    batch_prefixes=["batch_01", "batch_02", "batch_03"],
+    work_dir="work/",
+    delivery_dir="delivery/",
+    staging_root="researcher_staging/",
+)
+
+pipeline = DeliveryPipeline()
+result = pipeline.run(config)
+print(f"Delivered {result.transfer_report.file_count} files")
+```
+
+### Individual Modules
+
+```python
+from cohort_delivery import CohortFilter, ManifestGenerator
+
+# Filter a cohort
+flt = CohortFilter()
+report = flt.apply("cohort.txt", exclusion_paths=["exclusions.csv"], output_path="filtered.txt")
+print(f"{report.original_count} -> {report.final_count} samples")
+
+# Generate manifest
+gen = ManifestGenerator()
+manifest = gen.generate("delivery/", project_id="NBR030")
+gen.write_manifest(manifest, "delivery/MANIFEST.tsv")
+```
+
+## Testing
+
+```bash
+make test
+make lint
+```
+
+## Technical Stack
+
+- **PLINK 1.9/2.0** — high-speed genotype manipulation
+- **Python 3.9+** — pipeline orchestration and testing
+- **rsync** — secure, permission-controlled data transfer
+- **Bash/AWK** — legacy scripts for reference
+
+## Jira Provenance
+
+This pipeline covers work from:
+
+- **Cohort assembly** — multi-batch genotype extraction, merge with flip-error correction, VCF conversion.
+- **Data deliveries** — end-to-end packaging and transfer for research projects (NBR030-style).
+- **Quality assurance** — checksum manifest generation, sample-count verification.
+- **Governance** — sample exclusion based on gender mismatch, consent withdrawal, or QC failure.
+
+## Licence
+
+MIT

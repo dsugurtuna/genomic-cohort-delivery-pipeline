@@ -18,9 +18,9 @@ Author: Ugur Tuna
 import logging
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +153,7 @@ class GenotypeMerger:
 
         # Step 3: First merge attempt
         first_attempt = str(wd / "merge_attempt")
-        result = self._run_plink(
+        self._run_plink(
             [
                 "--bfile", subset_prefixes[0],
                 "--merge-list", str(merge_list),
