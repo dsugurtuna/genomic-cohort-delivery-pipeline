@@ -124,13 +124,18 @@ class CohortFilter:
         """
         Apply exclusion filtering to a cohort sample list.
 
+        The cohort file is either one sample ID per line, or PLINK-style
+        whitespace-delimited ``FID IID`` lines. Matching uses the sample ID
+        (the IID when there are two or more columns), and the output keeps
+        each line exactly as it was, so it stays valid for ``plink --keep``.
+
         Parameters
         ----------
         cohort_path : str
-            Path to the original sample list (one ID per line or whitespace-
-            delimited FID/IID).
+            Path to the original sample list.
         exclusion_paths : list of str, optional
-            Paths to exclusion CSV files.
+            Paths to exclusion CSV files (ID in the first column; a second
+            column, if present, is read as the reason).
         exclusion_set : set of str, optional
             Pre-loaded set of IDs to exclude.
         output_path : str, optional
@@ -139,38 +144,50 @@ class CohortFilter:
         Returns
         -------
         FilterReport
+            ``exclusion_count`` is the number of distinct IDs on the
+            exclusion lists; ``removed_count`` is how many cohort lines were
+            actually removed; ``exclusion_reasons`` counts removed samples by
+            reason where a reason was given.
         """
         cohort = Path(cohort_path)
         if not cohort.exists():
             raise FileNotFoundError(f"Cohort file not found: {cohort_path}")
 
-        # Build combined exclusion set
+        # Build combined exclusion set, remembering reasons where given.
         to_exclude: set[str] = set(exclusion_set) if exclusion_set else set()
+        reasons: dict[str, str] = {}
         if exclusion_paths:
             for ep in exclusion_paths:
                 to_exclude |= self.load_exclusion_set(ep)
+                reasons.update(self.load_exclusion_set_with_reasons(ep))
 
-        # Read original cohort
-        original_ids: list[str] = []
+        # Read original cohort, keeping each line intact.
+        original: list[tuple[str, str]] = []
         with open(cohort) as fh:
             for line in fh:
-                parts = line.strip().split()
+                parts = line.split()
                 if parts:
-                    original_ids.append(parts[0])
+                    sample_id = parts[1] if len(parts) >= 2 else parts[0]
+                    original.append((sample_id, line.rstrip("\n")))
 
-        # Filter
-        filtered = [sid for sid in original_ids if sid not in to_exclude]
+        kept = [line for sid, line in original if sid not in to_exclude]
+        removed = [sid for sid, _ in original if sid in to_exclude]
 
         report = FilterReport(
-            original_count=len(original_ids),
+            original_count=len(original),
             exclusion_count=len(to_exclude),
-            final_count=len(filtered),
+            final_count=len(kept),
         )
+        for sid in removed:
+            reason = reasons.get(sid, "unspecified")
+            report.exclusion_reasons[reason] = (
+                report.exclusion_reasons.get(reason, 0) + 1
+            )
 
         if output_path:
             out = Path(output_path)
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text("\n".join(filtered) + "\n")
-            logger.info("Wrote %d samples to %s", len(filtered), output_path)
+            out.write_text("".join(f"{line}\n" for line in kept))
+            logger.info("Wrote %d samples to %s", len(kept), output_path)
 
         return report

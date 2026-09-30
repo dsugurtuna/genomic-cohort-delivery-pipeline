@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """
-Genotype Merge and Correction Module
-======================================
+Genotype Merge Module
+=====================
 
-Orchestrates the extraction, merge, and automatic correction of multi-batch
-PLINK datasets. Implements a self-healing workflow:
+Extracts the filtered cohort from each PLINK 1.9 batch, merges the batches,
+and handles the most common merge failure:
 
-  1. Extract cohort samples from each source batch.
-  2. Attempt a merge across all batches.
-  3. Detect merge failures (flip/strand errors via .missnp files).
-  4. Exclude conflicting variants and re-merge.
-  5. Convert final result to VCF.
+  1. Extract cohort samples from each source batch (``--keep``).
+  2. Attempt a merge across all batches (``--merge-list``).
+  3. If PLINK reports variants with conflicting alleles (``-merge.missnp``,
+     typically strand flips or multi-allelic sites), exclude those variants
+     from every batch and merge again.
+  4. Convert the final result to bgzipped VCF.
+
+Conflicting variants are excluded, not repaired by flipping strands. The
+report lists them so the loss is visible. Any other PLINK failure stops the
+run with the relevant log lines.
 
 Author: Ugur Tuna
 """
@@ -18,7 +23,7 @@ Author: Ugur Tuna
 import logging
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -27,6 +32,10 @@ logger = logging.getLogger(__name__)
 def _count_lines(path: Path) -> int:
     with open(path) as fh:
         return sum(1 for _ in fh)
+
+
+class PlinkError(RuntimeError):
+    """A PLINK command failed for a reason this module does not handle."""
 
 
 @dataclass
@@ -39,12 +48,13 @@ class MergeReport:
     final_variant_count: int = 0
     correction_applied: bool = False
     output_prefix: str = ""
+    conflict_snps: list[str] = field(default_factory=list)
 
 
 class GenotypeMerger:
     """
-    Merges multi-batch PLINK binary datasets with automatic conflict
-    resolution.
+    Merges multi-batch PLINK binary datasets, excluding variants whose
+    alleles conflict between batches.
 
     Example::
 
@@ -63,10 +73,14 @@ class GenotypeMerger:
     def _run_plink(
         self, args: list[str], check: bool = True
     ) -> subprocess.CompletedProcess[str]:
-        """Execute a PLINK command."""
+        """Execute a PLINK command; on failure raise PlinkError with the output."""
         cmd = [self.plink_exec, *args]
         logger.info("Running: %s", " ".join(cmd))
-        return subprocess.run(cmd, capture_output=True, text=True, check=check)
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if check and proc.returncode != 0:
+            tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-10:])
+            raise PlinkError(f"{' '.join(cmd)} exited {proc.returncode}:\n{tail}")
+        return proc
 
     def extract_samples(
         self,
@@ -83,11 +97,11 @@ class GenotypeMerger:
         bfile_prefix : str
             PLINK binary file prefix (.bed/.bim/.fam).
         keep_list : str
-            Path to a file of sample IDs to keep (FID IID format).
+            Path to a file of sample IDs to keep (``FID IID`` per line).
         output_prefix : str
             Output file prefix.
         exclude_snps : str, optional
-            Path to a list of SNPs to exclude.
+            Path to a list of variant IDs to exclude.
 
         Returns
         -------
@@ -109,6 +123,24 @@ class GenotypeMerger:
         self._run_plink(args)
         return output_prefix
 
+    def _merge(
+        self, prefixes: list[str], merge_list: Path, out: str, check: bool
+    ) -> bool:
+        merge_list.write_text("\n".join(prefixes[1:]) + "\n")
+        proc = self._run_plink(
+            [
+                "--bfile",
+                prefixes[0],
+                "--merge-list",
+                str(merge_list),
+                "--make-bed",
+                "--out",
+                out,
+            ],
+            check=check,
+        )
+        return proc.returncode == 0
+
     def merge(
         self,
         batch_prefixes: list[str],
@@ -118,7 +150,7 @@ class GenotypeMerger:
         convert_to_vcf: bool = True,
     ) -> MergeReport:
         """
-        Full merge pipeline with automatic conflict resolution.
+        Extract, merge and (if needed) exclude conflicting variants.
 
         Parameters
         ----------
@@ -136,89 +168,70 @@ class GenotypeMerger:
         Returns
         -------
         MergeReport
+
+        Raises
+        ------
+        PlinkError
+            If PLINK fails for any reason other than an allele conflict that
+            excluding the listed variants resolves.
         """
+        if not batch_prefixes:
+            raise ValueError("No batches to merge")
         wd = Path(work_dir)
         wd.mkdir(parents=True, exist_ok=True)
 
         report = MergeReport(batch_count=len(batch_prefixes))
 
-        # Step 1: Extract samples from each batch
-        subset_prefixes: list[str] = []
-        for bp in batch_prefixes:
-            name = Path(bp).name
-            out = str(wd / f"{name}_subset")
-            self.extract_samples(bp, keep_list, out)
-            subset_prefixes.append(out)
-
-        if len(subset_prefixes) < 2:
-            logger.warning("Fewer than 2 batches; skipping merge.")
-            if subset_prefixes:
-                report.output_prefix = subset_prefixes[0]
-            return report
-
-        # Step 2: Write merge list
-        merge_list = wd / "merge_list.txt"
-        merge_list.write_text("\n".join(subset_prefixes[1:]) + "\n")
-
-        # Step 3: First merge attempt
-        first_attempt = str(wd / "merge_attempt")
-        self._run_plink(
-            [
-                "--bfile",
-                subset_prefixes[0],
-                "--merge-list",
-                str(merge_list),
-                "--make-bed",
-                "--out",
-                first_attempt,
-            ],
-            check=False,
-        )
-
-        # Step 4: Check for merge conflicts
-        missnp = Path(f"{first_attempt}-merge.missnp")
-        if missnp.exists() and missnp.stat().st_size > 0:
-            conflict_count = _count_lines(missnp)
-            report.conflict_snp_count = conflict_count
-            report.correction_applied = True
-            logger.info(
-                "Detected %d conflicting SNPs — re-extracting with exclusions.",
-                conflict_count,
-            )
-
-            # Re-extract excluding problematic SNPs
-            corrected_prefixes: list[str] = []
-            for bp in batch_prefixes:
-                name = Path(bp).name
-                out = str(wd / f"{name}_corrected")
-                self.extract_samples(bp, keep_list, out, exclude_snps=str(missnp))
-                corrected_prefixes.append(out)
-
-            corrected_list = wd / "merge_list_corrected.txt"
-            corrected_list.write_text("\n".join(corrected_prefixes[1:]) + "\n")
-
-            self._run_plink(
-                [
-                    "--bfile",
-                    corrected_prefixes[0],
-                    "--merge-list",
-                    str(corrected_list),
-                    "--make-bed",
-                    "--out",
-                    output_prefix,
-                ]
-            )
+        if len(batch_prefixes) == 1:
+            # Nothing to merge: extract straight to the final prefix.
+            self.extract_samples(batch_prefixes[0], keep_list, output_prefix)
         else:
-            # No conflicts — rename first attempt to final
-            for ext in (".bed", ".bim", ".fam", ".log"):
-                src = Path(f"{first_attempt}{ext}")
-                dst = Path(f"{output_prefix}{ext}")
-                if src.exists():
-                    shutil.move(str(src), str(dst))
+            subset_prefixes = [
+                self.extract_samples(bp, keep_list, str(wd / f"{Path(bp).name}_subset"))
+                for bp in batch_prefixes
+            ]
+            first_attempt = str(wd / "merge_attempt")
+            ok = self._merge(
+                subset_prefixes, wd / "merge_list.txt", first_attempt, False
+            )
+            missnp = Path(f"{first_attempt}-merge.missnp")
+
+            if ok:
+                for ext in (".bed", ".bim", ".fam", ".log"):
+                    src = Path(f"{first_attempt}{ext}")
+                    if src.exists():
+                        shutil.move(str(src), f"{output_prefix}{ext}")
+            elif missnp.exists() and missnp.stat().st_size > 0:
+                report.conflict_snps = sorted(
+                    {
+                        line.strip()
+                        for line in missnp.read_text().splitlines()
+                        if line.strip()
+                    }
+                )
+                report.conflict_snp_count = len(report.conflict_snps)
+                report.correction_applied = True
+                logger.warning(
+                    "Excluding %d variants with conflicting alleles and re-merging.",
+                    report.conflict_snp_count,
+                )
+                corrected = [
+                    self.extract_samples(
+                        bp,
+                        keep_list,
+                        str(wd / f"{Path(bp).name}_corrected"),
+                        exclude_snps=str(missnp),
+                    )
+                    for bp in batch_prefixes
+                ]
+                self._merge(
+                    corrected, wd / "merge_list_corrected.txt", output_prefix, True
+                )
+            else:
+                # Re-run with check=True to raise with PLINK's own message.
+                self._merge(subset_prefixes, wd / "merge_list.txt", first_attempt, True)
 
         report.output_prefix = output_prefix
-
-        # Count final samples and variants
         fam = Path(f"{output_prefix}.fam")
         bim = Path(f"{output_prefix}.bim")
         if fam.exists():
@@ -226,7 +239,6 @@ class GenotypeMerger:
         if bim.exists():
             report.final_variant_count = _count_lines(bim)
 
-        # Step 5: VCF conversion
         if convert_to_vcf:
             self._run_plink(
                 [
