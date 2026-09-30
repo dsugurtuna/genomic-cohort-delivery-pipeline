@@ -2,8 +2,8 @@
 Genomic Cohort Delivery Pipeline
 =================================
 
-A production-grade pipeline for assembling, correcting, and securely
-delivering large-scale genomic cohorts from multi-batch biobank data.
+Filter, merge and package multi-batch PLINK 1.9 genotype data for a research
+delivery, with checksum manifests and verified copies to a staging area.
 
 Author: Ugur Tuna
 """

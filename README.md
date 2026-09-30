@@ -1,85 +1,73 @@
 # Genomic Cohort Delivery Pipeline
 
 [![CI](https://github.com/dsugurtuna/genomic-cohort-delivery-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/dsugurtuna/genomic-cohort-delivery-pipeline/actions)
-[![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/)
-[![PLINK](https://img.shields.io/badge/Tool-PLINK%201.9-red)](https://www.cog-genomics.org/plink/)
-[![Portfolio](https://img.shields.io/badge/Status-Portfolio_Project-purple.svg)]()
 
-An industrial-grade pipeline for assembling, correcting, and securely delivering large-scale genomic cohorts from multi-batch biobank data.
+Assemble a research cohort from multi-batch PLINK 1.9 genotype data: remove excluded participants, merge batches, handle allele conflicts, write a checksum manifest, and copy the package to a staging area with verification.
 
 > **Portfolio disclaimer:** This repository contains sanitised, generalised versions of workflows developed at NIHR BioResource. No real participant data, internal paths, or infrastructure details are included. All examples use synthetic data.
 
----
+**Where this fits:** part of my clinical genomics and biobank data work. This repo delivers PLINK
+cohorts; [biobank-data-release-manager](https://github.com/dsugurtuna/biobank-data-release-manager)
+extracts VCF subsets for approved requests; and
+[secure-genomic-transfer](https://github.com/dsugurtuna/secure-genomic-transfer) encrypts and
+checksums files for transfer between organisations.
 
-## Architecture
+## The problem
 
-```text
-Exclusion Lists ─┐
-                  ├──> CohortFilter ──> Filtered Sample List
-Cohort Sample List┘                            │
-                                               v
-Batch 1 (.bed/.bim/.fam) ─┐                   │
-Batch 2 (.bed/.bim/.fam) ──┼──> GenotypeMerger ──> Merged PLINK / VCF
-Batch N (.bed/.bim/.fam) ─┘  (auto-correction)     │
-                                                    v
-                                       ManifestGenerator ──> MANIFEST.tsv
-                                                    │           STATUS.tsv
-                                                    v
-                                           SecureTransfer ──> Researcher Staging
-```
+A data release for a research project needs the approved participants, from genotype batches
+typed at different times, in one file set, minus anyone who has withdrawn or failed QC. Batches
+often disagree on a few variants' alleles, which makes a PLINK merge fail. The recipient then needs
+to be able to check that what arrived is what was sent.
 
-## Key Capabilities
+## What this does
 
-### Automated Conflict Resolution
+1. **Filter** (`CohortFilter`): remove samples on exclusion lists from a cohort list. Works with
+   PLINK `FID IID` lines (matching on IID and keeping lines intact for `--keep`) and counts
+   removals by reason.
+2. **Merge** (`GenotypeMerger`): extract the cohort from each batch, merge with
+   `--merge-list`, and if PLINK writes a `-merge.missnp` file, exclude those variants from every
+   batch and merge again. Excluded variants are listed. Any other PLINK failure stops the run with
+   PLINK's own message. Converts the result to bgzipped VCF.
+3. **Manifest** (`ManifestGenerator`): size, MD5 and SHA-256 per file, plus a status summary with
+   requested and delivered sample counts. `verify()` checks a directory against a manifest.
+4. **Transfer** (`SecureTransfer`): copy (or rsync) into a new dated staging directory with
+   owner/group-only permissions, then verify every file's checksums at the destination.
 
-Merging genotypes from different array batches often fails due to strand (flip) errors. The `GenotypeMerger` implements a **self-healing workflow**:
-
-1. Attempts a merge across all batches.
-2. Catches PLINK merge failures.
-3. Parses the `.missnp` log to identify conflicting variants.
-4. Re-extracts data excluding those variants.
-5. Re-merges the cleaned data successfully.
-
-### Data Governance
-
-- **Exclusion filtering** — withdrawn participants are never included in a delivery (GDPR / bioethics compliance).
-- **Manifest generation** — every delivery includes MD5 and SHA-256 checksums for integrity verification.
-- **Permission-controlled transfer** — rsync with explicit `chmod` directives.
-
-## Repository Structure
-
-```text
-.
-├── src/cohort_delivery/          Python package
-│   ├── __init__.py
-│   ├── filter.py                 Cohort exclusion filtering
-│   ├── merge.py                  Multi-batch merge with auto-correction
-│   ├── manifest.py               Checksum manifest generator
-│   ├── transfer.py               Secure rsync/copy transfer
-│   └── pipeline.py               End-to-end orchestrator
-├── tests/                        Pytest test suite
-│   ├── test_filter.py
-│   ├── test_manifest.py
-│   └── test_transfer.py
-├── legacy/                       Original shell scripts
-│   ├── filter_cohort_samples.sh
-│   ├── merge_and_correct_genotypes.sh
-│   ├── generate_delivery_manifest.sh
-│   └── secure_transfer_protocol.sh
-├── .github/workflows/ci.yml     CI pipeline
-├── pyproject.toml
-├── Dockerfile
-├── Makefile
-└── README.md
-```
-
-## Quick Start
+## Quickstart
 
 ```bash
+git clone https://github.com/dsugurtuna/genomic-cohort-delivery-pipeline.git
+cd genomic-cohort-delivery-pipeline
+python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
+pytest
+python examples/demo.py
 ```
 
-### Python API
+The demo runs the whole pipeline offline on synthetic batches, with
+[`examples/fake_plink.py`](examples/fake_plink.py) standing in for PLINK (it mimics extraction,
+merge conflicts and VCF conversion, nothing more). Output, checked by `tests/test_demo.py` (the
+first line is a logged warning on stderr):
+
+```text
+Excluding 1 variants with conflicting alleles and re-merging.
+Cohort: 10 samples; removed 2 {'Withdrawal': 1, 'SexMismatch': 1}
+Merged: 8 samples, 3 variants
+Excluded for allele conflicts: ['rs9300001']
+Delivered 7 files; checksums verified: True
+  DEMO01_final_genotypes.bed
+  DEMO01_final_genotypes.bim
+  DEMO01_final_genotypes.fam
+  DEMO01_final_genotypes.log
+  DEMO01_final_genotypes.vcf.gz
+  MANIFEST.tsv
+  STATUS_SUMMARY.tsv
+```
+
+`rs9300001` is A/G in one batch and T/C in the other (a strand flip), so it is excluded rather
+than silently merged.
+
+### With real data (needs PLINK 1.9 and rsync)
 
 ```python
 from cohort_delivery import DeliveryPipeline
@@ -100,7 +88,7 @@ result = pipeline.run(config)
 print(f"Delivered {result.transfer_report.file_count} files")
 ```
 
-### Individual Modules
+### Individual modules
 
 ```python
 from cohort_delivery import CohortFilter, ManifestGenerator
@@ -116,19 +104,63 @@ manifest = gen.generate("delivery/", project_id="NBR030")
 gen.write_manifest(manifest, "delivery/MANIFEST.tsv")
 ```
 
-## Testing
+## How it works
 
-```bash
-make test
-make lint
+```mermaid
+flowchart LR
+    C[Cohort list<br/>FID IID] --> F[CohortFilter]
+    X[Exclusion lists] --> F
+    F -->|keep list| E[Extract per batch<br/>plink --keep]
+    B[Batches .bed/.bim/.fam] --> E
+    E --> M{Merge}
+    M -->|missnp| R[Exclude conflicts,<br/>re-extract, merge]
+    M -->|ok| V[VCF]
+    R --> V
+    V --> MF[Manifest + status]
+    MF --> T[Copy to staging<br/>0640 / 0750]
+    T --> CK[Verify checksums]
 ```
 
-## Technical Stack
+## Design decisions
 
-- **PLINK 1.9/2.0** — high-speed genotype manipulation
-- **Python 3.9+** — pipeline orchestration and testing
-- **rsync** — secure, permission-controlled data transfer
-- **Bash/AWK** — legacy scripts for reference
+- **Exclude conflicting variants, and say so.** Flipping strands automatically is only safe for
+  non-palindromic SNPs and needs a reference; getting it wrong silently corrupts genotypes.
+  Excluding is conservative, and the excluded list goes into the report.
+- **Stop on any other PLINK failure.** The first version ignored non-zero exits without a
+  `.missnp` file and carried on with missing files. A delivery that half-worked is worse than one
+  that stopped.
+- **Match on IID, keep lines intact.** PLINK 1.9 `--keep` expects `FID IID`. Reducing lines to one
+  column broke the keep list and matched exclusions against family IDs.
+- **No integrity verdict without a check.** The status file used to say `PASS` unconditionally.
+  Verification now happens at the destination against the manifest, and the result is reported
+  by the code that ran it.
+- **No access for "others" by default.** Genotype data should be readable by the owner and the
+  project group only. The old defaults gave read access to every user on the system.
+- **Never deliver into an existing directory.** Re-running on the same day must not mix two
+  deliveries.
+- **Standard library only in the package.** PLINK and rsync do the heavy lifting; Python
+  orchestrates, checks and records.
+
+## Limitations and what this is not
+
+- PLINK 1.9 only. PLINK 2 uses different merge and export commands.
+- Conflicting variants are dropped, not repaired. A/T and C/G SNPs that are strand-flipped but look
+  consistent are not detected; check strand against a reference before merging.
+- No sample or variant QC. Inputs are assumed to be QC'd batches.
+- "Transfer" is a local copy or rsync to a filesystem the pipeline can write to. There is no
+  encryption and no transfer between organisations; see
+  [secure-genomic-transfer](https://github.com/dsugurtuna/secure-genomic-transfer) for that.
+- Exclusions only work if the exclusion lists are complete and use the same IDs as the genotype
+  files. The pipeline checks requested against delivered sample counts but cannot know about a
+  withdrawal that is not on a list.
+- `legacy/` holds the original shell scripts for reference. They simulate PLINK and are not tested.
+
+## Roadmap
+
+- Strand check against a reference panel before merging, with automatic flipping only for
+  non-ambiguous SNPs.
+- A CLI with a config file, so a delivery is reproducible from one file.
+- Write the excluded-variant list into the delivery package.
 
 ## Jira Provenance
 
@@ -139,6 +171,20 @@ This pipeline covers work from:
 - **Quality assurance** — checksum manifest generation, sample-count verification.
 - **Governance** — sample exclusion based on gender mismatch, consent withdrawal, or QC failure.
 
+## Development
+
+```bash
+make dev     # install with dev dependencies
+make check   # ruff lint and format check, mypy, pytest
+```
+
+See [docs/WHY.md](docs/WHY.md) for the reasoning behind the design, and
+[CONTRIBUTING.md](CONTRIBUTING.md) to contribute.
+
 ## Licence
 
-MIT
+See [LICENSE](LICENSE).
+
+---
+
+Personal project by [Ugur Tuna](https://github.com/dsugurtuna). Not affiliated with or endorsed by any employer.
