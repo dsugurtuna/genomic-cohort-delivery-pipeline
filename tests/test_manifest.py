@@ -55,3 +55,30 @@ class TestManifestGenerator:
         assert out.exists()
         text = out.read_text()
         assert "TEST004" in text
+
+    def test_status_summary_does_not_claim_unrun_check(self, generator, tmp_path):
+        (tmp_path / "data.txt").write_text("content")
+        manifest = generator.generate(str(tmp_path), "TEST005")
+        out = tmp_path / "STATUS_SUMMARY.tsv"
+        generator.write_status_summary(manifest, str(out))
+        assert "Integrity_Check" not in out.read_text()
+
+    def test_data_file_named_status_is_included(self, generator, tmp_path):
+        (tmp_path / "STATUS_codes.txt").write_text("x")
+        manifest = generator.generate(str(tmp_path), "TEST006")
+        assert [f.filename for f in manifest.files] == ["STATUS_codes.txt"]
+
+    def test_verify_detects_changes(self, generator, tmp_path):
+        (tmp_path / "a.txt").write_text("one")
+        (tmp_path / "b.txt").write_text("two")
+        manifest = generator.generate(str(tmp_path), "TEST007")
+        assert generator.verify(manifest, str(tmp_path)) == []
+        (tmp_path / "a.txt").write_text("ONE")
+        (tmp_path / "b.txt").unlink()
+        (tmp_path / "c.txt").write_text("new")
+        problems = generator.verify(manifest, str(tmp_path))
+        assert problems == [
+            "checksum mismatch: a.txt",
+            "missing: b.txt",
+            "unexpected: c.txt",
+        ]

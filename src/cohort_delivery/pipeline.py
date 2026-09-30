@@ -99,6 +99,8 @@ class DeliveryPipeline:
             result.filter_report.original_count,
             result.filter_report.final_count,
         )
+        if result.filter_report.final_count == 0:
+            raise ValueError("No samples left after exclusions; nothing to deliver.")
 
         # Step 2: Merge
         if config.batch_prefixes:
@@ -113,11 +115,20 @@ class DeliveryPipeline:
                 convert_to_vcf=config.convert_to_vcf,
             )
             logger.info(
-                "Merge complete: %d samples, %d variants, %d conflicts resolved",
+                "Merge complete: %d samples, %d variants, %d excluded for conflicts",
                 result.merge_report.final_sample_count,
                 result.merge_report.final_variant_count,
                 result.merge_report.conflict_snp_count,
             )
+            if (
+                result.merge_report.final_sample_count
+                != result.filter_report.final_count
+            ):
+                logger.warning(
+                    "Requested %d samples but genotypes have %d; check IDs, batches.",
+                    result.filter_report.final_count,
+                    result.merge_report.final_sample_count,
+                )
 
         # Step 3: Manifest
         logger.info("Step 3: Generating delivery manifest")
@@ -127,19 +138,29 @@ class DeliveryPipeline:
             project_id=config.project_id,
         )
         gen.write_manifest(result.manifest, str(dd / "MANIFEST.tsv"))
-        gen.write_status_summary(result.manifest, str(dd / "STATUS_SUMMARY.tsv"))
+        counts = {"Samples_Requested": str(result.filter_report.final_count)}
+        if result.merge_report is not None:
+            counts["Samples_In_Genotypes"] = str(result.merge_report.final_sample_count)
+            counts["Variants"] = str(result.merge_report.final_variant_count)
+            counts["Variants_Excluded_Conflicts"] = str(
+                result.merge_report.conflict_snp_count
+            )
+        gen.write_status_summary(
+            result.manifest, str(dd / "STATUS_SUMMARY.tsv"), counts
+        )
 
         # Step 4: Transfer
-        logger.info("Step 4: Secure transfer")
+        logger.info("Step 4: Transfer to staging and verify checksums")
         xfer = SecureTransfer()
         result.transfer_report = xfer.send(
             source_dir=config.delivery_dir,
             dest_root=config.staging_root,
             project_id=config.project_id,
             method=config.transfer_method,
+            manifest=result.manifest,
         )
         logger.info(
-            "Transfer complete: %d files, verified=%s",
+            "Transfer complete: %d files, checksums verified=%s",
             result.transfer_report.file_count,
             result.transfer_report.verified,
         )
