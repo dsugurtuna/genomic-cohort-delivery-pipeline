@@ -11,7 +11,7 @@
 # --- Configuration ---
 SOURCE_DIR="./data/delivery"
 DEST_ROOT="./data/researcher_staging"
-PROJECT_ID="NBR030"
+PROJECT_ID="STUDY-A"
 DEST_DIR="${DEST_ROOT}/${PROJECT_ID}_Delivery_$(date +'%Y%m%d')"
 
 echo "=== Secure Data Transfer Protocol ==="

@@ -46,7 +46,7 @@ class SecureTransfer:
         report = transfer.send(
             source_dir="delivery/",
             dest_root="researcher_staging/",
-            project_id="NBR030",
+            project_id="STUDY-A",
         )
     """
 

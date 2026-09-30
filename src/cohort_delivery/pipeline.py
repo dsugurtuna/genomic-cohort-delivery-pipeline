@@ -58,7 +58,7 @@ class DeliveryPipeline:
     Example::
 
         config = PipelineConfig(
-            project_id="NBR030",
+            project_id="STUDY-A",
             cohort_file="cohort_all.txt",
             exclusion_files=["exclusions.csv"],
             batch_prefixes=["batch_01", "batch_02"],

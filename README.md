@@ -74,7 +74,7 @@ from cohort_delivery import DeliveryPipeline
 from cohort_delivery.pipeline import PipelineConfig
 
 config = PipelineConfig(
-    project_id="NBR030",
+    project_id="STUDY-A",
     cohort_file="cohort_all_samples.txt",
     exclusion_files=["exclusion_list_gender_mismatch.csv"],
     batch_prefixes=["batch_01", "batch_02", "batch_03"],
@@ -100,7 +100,7 @@ print(f"{report.original_count} -> {report.final_count} samples")
 
 # Generate manifest
 gen = ManifestGenerator()
-manifest = gen.generate("delivery/", project_id="NBR030")
+manifest = gen.generate("delivery/", project_id="STUDY-A")
 gen.write_manifest(manifest, "delivery/MANIFEST.tsv")
 ```
 
@@ -161,15 +161,6 @@ flowchart LR
   non-ambiguous SNPs.
 - A CLI with a config file, so a delivery is reproducible from one file.
 - Write the excluded-variant list into the delivery package.
-
-## Jira Provenance
-
-This pipeline covers work from:
-
-- **Cohort assembly** — multi-batch genotype extraction, merge with flip-error correction, VCF conversion.
-- **Data deliveries** — end-to-end packaging and transfer for research projects (NBR030-style).
-- **Quality assurance** — checksum manifest generation, sample-count verification.
-- **Governance** — sample exclusion based on gender mismatch, consent withdrawal, or QC failure.
 
 ## Development
 

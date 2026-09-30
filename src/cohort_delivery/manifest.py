@@ -56,7 +56,7 @@ class ManifestGenerator:
         gen = ManifestGenerator()
         manifest = gen.generate(
             delivery_dir="delivery/",
-            project_id="NBR030",
+            project_id="STUDY-A",
         )
         gen.write_manifest(manifest, "delivery/MANIFEST.tsv")
     """
