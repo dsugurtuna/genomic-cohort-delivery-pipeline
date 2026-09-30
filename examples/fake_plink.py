@@ -1,4 +1,4 @@
-"""A tiny stand-in for PLINK 1.9, used by tests via the fake_plink fixture.
+"""A tiny stand-in for PLINK 1.9, used by the demo and the tests.
 
 Supports --bfile/--keep/--exclude/--make-bed/--out extraction, --merge-list
 (writing <out>-merge.missnp and exiting non-zero when a variant's alleles

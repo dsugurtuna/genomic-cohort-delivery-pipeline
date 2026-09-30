@@ -1,6 +1,6 @@
 """Shared fixtures: a fake `plink` executable and small synthetic batches.
 
-The fake (tests/fake_plink.py) implements just enough of PLINK 1.9's
+The fake (examples/fake_plink.py) implements just enough of PLINK 1.9's
 behaviour for these tests. Set FAKE_PLINK_FAIL_MERGE=1 to make merges fail
 for a reason other than an allele conflict.
 """
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-FAKE_PLINK = Path(__file__).with_name("fake_plink.py")
+FAKE_PLINK = Path(__file__).resolve().parent.parent / "examples" / "fake_plink.py"
 
 
 @pytest.fixture()
