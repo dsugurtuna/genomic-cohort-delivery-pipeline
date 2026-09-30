@@ -15,7 +15,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +35,8 @@ class DeliveryManifest:
 
     project_id: str
     delivery_date: str
-    files: List[FileChecksum] = field(default_factory=list)
-    metadata: Dict[str, str] = field(default_factory=dict)
+    files: list[FileChecksum] = field(default_factory=list)
+    metadata: dict[str, str] = field(default_factory=dict)
 
     @property
     def total_files(self) -> int:
@@ -57,10 +56,12 @@ class ManifestGenerator:
         gen = ManifestGenerator()
         manifest = gen.generate(
             delivery_dir="delivery/",
-            project_id="NBR030",
+            project_id="STUDY-A",
         )
         gen.write_manifest(manifest, "delivery/MANIFEST.tsv")
     """
+
+    OWN_FILES = frozenset({"MANIFEST.tsv", "STATUS_SUMMARY.tsv"})
 
     @staticmethod
     def compute_checksums(filepath: str) -> FileChecksum:
@@ -93,7 +94,7 @@ class ManifestGenerator:
         self,
         delivery_dir: str,
         project_id: str,
-        exclude_patterns: Optional[List[str]] = None,
+        exclude_patterns: list[str] | None = None,
     ) -> DeliveryManifest:
         """
         Generate a manifest for all files in a delivery directory.
@@ -103,13 +104,14 @@ class ManifestGenerator:
         delivery_dir : str
         project_id : str
         exclude_patterns : list of str, optional
-            Filename substrings to skip (e.g. "MANIFEST", "STATUS").
+            Filename substrings to skip. By default only the manifest and
+            status files this module writes are skipped, by exact name, so a
+            data file that happens to contain "STATUS" is still included.
 
         Returns
         -------
         DeliveryManifest
         """
-        exclude = set(exclude_patterns) if exclude_patterns else {"MANIFEST", "STATUS"}
         directory = Path(delivery_dir)
         if not directory.is_dir():
             raise NotADirectoryError(f"Not a directory: {delivery_dir}")
@@ -122,7 +124,10 @@ class ManifestGenerator:
         for fp in sorted(directory.iterdir()):
             if not fp.is_file():
                 continue
-            if any(pat in fp.name for pat in exclude):
+            if exclude_patterns is None:
+                if fp.name in self.OWN_FILES:
+                    continue
+            elif any(pat in fp.name for pat in exclude_patterns):
                 continue
             manifest.files.append(self.compute_checksums(str(fp)))
 
@@ -139,15 +144,22 @@ class ManifestGenerator:
             writer.writerow(["Filename", "Size_Bytes", "MD5", "SHA256"])
             for fc in manifest.files:
                 writer.writerow([fc.filename, fc.file_size, fc.md5, fc.sha256])
-        logger.info("Manifest written to %s (%d files)", output_path, manifest.total_files)
+        logger.info(
+            "Manifest written to %s (%d files)", output_path, manifest.total_files
+        )
 
     @staticmethod
     def write_status_summary(
         manifest: DeliveryManifest,
         output_path: str,
-        extra_metadata: Optional[Dict[str, str]] = None,
+        extra_metadata: dict[str, str] | None = None,
     ) -> None:
-        """Write a status summary TSV."""
+        """Write a status summary TSV.
+
+        No integrity verdict is written unless the caller supplies one in
+        ``extra_metadata`` (for example after ``verify``). A summary must not
+        claim a check that was never run.
+        """
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -156,7 +168,6 @@ class ManifestGenerator:
             "Delivery_Date": manifest.delivery_date,
             "Total_Files": str(manifest.total_files),
             "Total_Size_Bytes": str(manifest.total_size_bytes),
-            "Integrity_Check": "PASS",
         }
         if extra_metadata:
             meta.update(extra_metadata)
@@ -166,3 +177,32 @@ class ManifestGenerator:
             writer.writerow(["Metric", "Value"])
             for k, v in meta.items():
                 writer.writerow([k, v])
+
+    def verify(self, manifest: DeliveryManifest, directory: str) -> list[str]:
+        """Check files in ``directory`` against a manifest.
+
+        Returns a list of problems (missing files, size or checksum
+        mismatches, unexpected extra files); an empty list means every file
+        matches.
+        """
+        root = Path(directory)
+        problems: list[str] = []
+        expected = {fc.filename: fc for fc in manifest.files}
+        for name, fc in expected.items():
+            fp = root / name
+            if not fp.is_file():
+                problems.append(f"missing: {name}")
+                continue
+            actual = self.compute_checksums(str(fp))
+            if actual.file_size != fc.file_size:
+                problems.append(f"size mismatch: {name}")
+            elif actual.sha256 != fc.sha256 or actual.md5 != fc.md5:
+                problems.append(f"checksum mismatch: {name}")
+        for fp in sorted(root.iterdir()):
+            if (
+                fp.is_file()
+                and fp.name not in expected
+                and fp.name not in self.OWN_FILES
+            ):
+                problems.append(f"unexpected: {fp.name}")
+        return problems

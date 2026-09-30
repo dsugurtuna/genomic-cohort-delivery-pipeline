@@ -10,7 +10,7 @@
 
 # --- Configuration ---
 DELIVERY_DIR="./data/delivery"
-PROJECT_ID="NBR030"
+PROJECT_ID="STUDY-A"
 MANIFEST_FILE="${DELIVERY_DIR}/MANIFEST.tsv"
 STATUS_FILE="${DELIVERY_DIR}/STATUS_SUMMARY.tsv"
 
@@ -48,9 +48,9 @@ echo "Step 2: Generating status report..."
 VCF_FILE="${DELIVERY_DIR}/${PROJECT_ID}_final_genotypes.vcf.gz"
 LINKAGE_FILE="${DELIVERY_DIR}/${PROJECT_ID}_sample_linkage.txt"
 
-# Simulation: Mock counts
-VCF_SAMPLES=10732
-LINKAGE_ROWS=10732
+# Simulation: Mock counts (illustrative numbers only)
+VCF_SAMPLES=1000
+LINKAGE_ROWS=1000
 
 {
   echo -e "Metric\tValue"

@@ -57,3 +57,23 @@ class TestCohortFilter:
     def test_missing_exclusion_raises(self, filter_instance):
         with pytest.raises(FileNotFoundError):
             filter_instance.load_exclusion_set("/nonexistent/file.csv")
+
+
+class TestPlinkKeepFormat:
+    def test_fid_iid_lines_match_on_iid_and_are_preserved(self, tmp_path):
+        cohort = tmp_path / "cohort.txt"
+        cohort.write_text("FAM1 S001\nFAM2 S002\nFAM3 S003\n")
+        excl = tmp_path / "excl.csv"
+        excl.write_text("SampleID,Reason\nS002,Withdrawn\n")
+        out = tmp_path / "keep.txt"
+        report = CohortFilter().apply(str(cohort), [str(excl)], output_path=str(out))
+        assert out.read_text() == "FAM1 S001\nFAM3 S003\n"
+        assert report.removed_count == 1
+        assert report.exclusion_reasons == {"Withdrawn": 1}
+
+    def test_exclusion_count_vs_removed_count(self, tmp_path):
+        cohort = tmp_path / "cohort.txt"
+        cohort.write_text("S001\nS002\n")
+        report = CohortFilter().apply(str(cohort), exclusion_set={"S002", "S999"})
+        assert report.exclusion_count == 2  # IDs on the list
+        assert report.removed_count == 1  # IDs actually in the cohort

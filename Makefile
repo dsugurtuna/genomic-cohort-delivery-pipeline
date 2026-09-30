@@ -1,20 +1,27 @@
-.PHONY: help install dev test lint clean
+.PHONY: install dev lint format typecheck test check clean
 
-help:
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+install:
+	python -m pip install -e .
 
-install:  ## Install package
-	python3 -m pip install .
+dev:
+	python -m pip install -e ".[dev]"
 
-dev:  ## Install with dev dependencies
-	python3 -m pip install -e ".[dev]"
+lint:
+	ruff check src tests examples
+	ruff format --check src tests examples
 
-test:  ## Run tests
-	python3 -m pytest tests/ -v --tb=short
+format:
+	ruff check --fix src tests examples
+	ruff format src tests examples
 
-lint:  ## Lint with ruff
-	python3 -m ruff check src/ tests/
+typecheck:
+	mypy
 
-clean:  ## Remove build artefacts
-	rm -rf build/ dist/ *.egg-info src/*.egg-info .pytest_cache .ruff_cache
-	find . -type d -name __pycache__ -exec rm -rf {} +
+test:
+	pytest -v
+
+check: lint typecheck test
+
+clean:
+	rm -rf build/ dist/ *.egg-info src/*.egg-info .pytest_cache .ruff_cache .mypy_cache
+	find . -type d -name __pycache__ -prune -exec rm -rf {} +
