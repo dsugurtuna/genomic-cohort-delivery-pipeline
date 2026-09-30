@@ -174,7 +174,7 @@ See [docs/WHY.md](docs/WHY.md) for the reasoning behind the design, and
 
 ## Licence
 
-See [LICENSE](LICENSE).
+MIT is declared in `pyproject.toml`, but no licence file is included yet.
 
 ---
 
