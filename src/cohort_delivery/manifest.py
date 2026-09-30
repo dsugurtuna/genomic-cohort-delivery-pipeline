@@ -15,7 +15,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +35,8 @@ class DeliveryManifest:
 
     project_id: str
     delivery_date: str
-    files: List[FileChecksum] = field(default_factory=list)
-    metadata: Dict[str, str] = field(default_factory=dict)
+    files: list[FileChecksum] = field(default_factory=list)
+    metadata: dict[str, str] = field(default_factory=dict)
 
     @property
     def total_files(self) -> int:
@@ -93,7 +92,7 @@ class ManifestGenerator:
         self,
         delivery_dir: str,
         project_id: str,
-        exclude_patterns: Optional[List[str]] = None,
+        exclude_patterns: list[str] | None = None,
     ) -> DeliveryManifest:
         """
         Generate a manifest for all files in a delivery directory.
@@ -139,13 +138,15 @@ class ManifestGenerator:
             writer.writerow(["Filename", "Size_Bytes", "MD5", "SHA256"])
             for fc in manifest.files:
                 writer.writerow([fc.filename, fc.file_size, fc.md5, fc.sha256])
-        logger.info("Manifest written to %s (%d files)", output_path, manifest.total_files)
+        logger.info(
+            "Manifest written to %s (%d files)", output_path, manifest.total_files
+        )
 
     @staticmethod
     def write_status_summary(
         manifest: DeliveryManifest,
         output_path: str,
-        extra_metadata: Optional[Dict[str, str]] = None,
+        extra_metadata: dict[str, str] | None = None,
     ) -> None:
         """Write a status summary TSV."""
         path = Path(output_path)

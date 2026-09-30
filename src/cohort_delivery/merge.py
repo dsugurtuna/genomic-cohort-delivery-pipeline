@@ -20,9 +20,13 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _count_lines(path: Path) -> int:
+    with open(path) as fh:
+        return sum(1 for _ in fh)
 
 
 @dataclass
@@ -56,9 +60,11 @@ class GenotypeMerger:
     def __init__(self, plink_exec: str = "plink"):
         self.plink_exec = plink_exec
 
-    def _run_plink(self, args: List[str], check: bool = True) -> subprocess.CompletedProcess:
+    def _run_plink(
+        self, args: list[str], check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
         """Execute a PLINK command."""
-        cmd = [self.plink_exec] + args
+        cmd = [self.plink_exec, *args]
         logger.info("Running: %s", " ".join(cmd))
         return subprocess.run(cmd, capture_output=True, text=True, check=check)
 
@@ -67,7 +73,7 @@ class GenotypeMerger:
         bfile_prefix: str,
         keep_list: str,
         output_prefix: str,
-        exclude_snps: Optional[str] = None,
+        exclude_snps: str | None = None,
     ) -> str:
         """
         Extract samples from a PLINK binary fileset.
@@ -89,10 +95,13 @@ class GenotypeMerger:
             Output prefix of the extracted dataset.
         """
         args = [
-            "--bfile", bfile_prefix,
-            "--keep", keep_list,
+            "--bfile",
+            bfile_prefix,
+            "--keep",
+            keep_list,
             "--make-bed",
-            "--out", output_prefix,
+            "--out",
+            output_prefix,
         ]
         if exclude_snps:
             args.extend(["--exclude", exclude_snps])
@@ -102,7 +111,7 @@ class GenotypeMerger:
 
     def merge(
         self,
-        batch_prefixes: List[str],
+        batch_prefixes: list[str],
         keep_list: str,
         output_prefix: str,
         work_dir: str = "work",
@@ -134,7 +143,7 @@ class GenotypeMerger:
         report = MergeReport(batch_count=len(batch_prefixes))
 
         # Step 1: Extract samples from each batch
-        subset_prefixes: List[str] = []
+        subset_prefixes: list[str] = []
         for bp in batch_prefixes:
             name = Path(bp).name
             out = str(wd / f"{name}_subset")
@@ -155,10 +164,13 @@ class GenotypeMerger:
         first_attempt = str(wd / "merge_attempt")
         self._run_plink(
             [
-                "--bfile", subset_prefixes[0],
-                "--merge-list", str(merge_list),
+                "--bfile",
+                subset_prefixes[0],
+                "--merge-list",
+                str(merge_list),
                 "--make-bed",
-                "--out", first_attempt,
+                "--out",
+                first_attempt,
             ],
             check=False,
         )
@@ -166,7 +178,7 @@ class GenotypeMerger:
         # Step 4: Check for merge conflicts
         missnp = Path(f"{first_attempt}-merge.missnp")
         if missnp.exists() and missnp.stat().st_size > 0:
-            conflict_count = sum(1 for _ in open(missnp))
+            conflict_count = _count_lines(missnp)
             report.conflict_snp_count = conflict_count
             report.correction_applied = True
             logger.info(
@@ -175,7 +187,7 @@ class GenotypeMerger:
             )
 
             # Re-extract excluding problematic SNPs
-            corrected_prefixes: List[str] = []
+            corrected_prefixes: list[str] = []
             for bp in batch_prefixes:
                 name = Path(bp).name
                 out = str(wd / f"{name}_corrected")
@@ -187,10 +199,13 @@ class GenotypeMerger:
 
             self._run_plink(
                 [
-                    "--bfile", corrected_prefixes[0],
-                    "--merge-list", str(corrected_list),
+                    "--bfile",
+                    corrected_prefixes[0],
+                    "--merge-list",
+                    str(corrected_list),
                     "--make-bed",
-                    "--out", output_prefix,
+                    "--out",
+                    output_prefix,
                 ]
             )
         else:
@@ -207,17 +222,21 @@ class GenotypeMerger:
         fam = Path(f"{output_prefix}.fam")
         bim = Path(f"{output_prefix}.bim")
         if fam.exists():
-            report.final_sample_count = sum(1 for _ in open(fam))
+            report.final_sample_count = _count_lines(fam)
         if bim.exists():
-            report.final_variant_count = sum(1 for _ in open(bim))
+            report.final_variant_count = _count_lines(bim)
 
         # Step 5: VCF conversion
         if convert_to_vcf:
             self._run_plink(
                 [
-                    "--bfile", output_prefix,
-                    "--recode", "vcf", "bgz",
-                    "--out", output_prefix,
+                    "--bfile",
+                    output_prefix,
+                    "--recode",
+                    "vcf",
+                    "bgz",
+                    "--out",
+                    output_prefix,
                 ]
             )
 

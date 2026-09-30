@@ -16,7 +16,6 @@ Author: Ugur Tuna
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 from cohort_delivery.filter import CohortFilter, FilterReport
 from cohort_delivery.manifest import DeliveryManifest, ManifestGenerator
@@ -32,8 +31,8 @@ class PipelineConfig:
 
     project_id: str = "PROJ001"
     cohort_file: str = ""
-    exclusion_files: Optional[List[str]] = None
-    batch_prefixes: Optional[List[str]] = None
+    exclusion_files: list[str] | None = None
+    batch_prefixes: list[str] | None = None
     work_dir: str = "work"
     delivery_dir: str = "delivery"
     staging_root: str = "staging"
@@ -46,10 +45,10 @@ class PipelineConfig:
 class PipelineResult:
     """Aggregated output of the full pipeline."""
 
-    filter_report: Optional[FilterReport] = None
-    merge_report: Optional[MergeReport] = None
-    manifest: Optional[DeliveryManifest] = None
-    transfer_report: Optional[TransferReport] = None
+    filter_report: FilterReport | None = None
+    merge_report: MergeReport | None = None
+    manifest: DeliveryManifest | None = None
+    transfer_report: TransferReport | None = None
 
 
 class DeliveryPipeline:

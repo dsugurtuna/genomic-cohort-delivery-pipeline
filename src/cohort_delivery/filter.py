@@ -16,7 +16,6 @@ import csv
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +27,7 @@ class FilterReport:
     original_count: int = 0
     exclusion_count: int = 0
     final_count: int = 0
-    exclusion_reasons: Dict[str, int] = field(default_factory=dict)
+    exclusion_reasons: dict[str, int] = field(default_factory=dict)
 
     @property
     def removed_count(self) -> int:
@@ -57,7 +56,7 @@ class CohortFilter:
         id_column: int = 0,
         has_header: bool = True,
         delimiter: str = ",",
-    ) -> Set[str]:
+    ) -> set[str]:
         """
         Read an exclusion file and return a set of sample identifiers.
 
@@ -80,7 +79,7 @@ class CohortFilter:
         if not path.exists():
             raise FileNotFoundError(f"Exclusion file not found: {filepath}")
 
-        ids: Set[str] = set()
+        ids: set[str] = set()
         with open(path) as fh:
             reader = csv.reader(fh, delimiter=delimiter)
             if has_header:
@@ -97,7 +96,7 @@ class CohortFilter:
         reason_column: int = 1,
         has_header: bool = True,
         delimiter: str = ",",
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """
         Read an exclusion file and return a mapping of sample ID to reason.
         """
@@ -105,7 +104,7 @@ class CohortFilter:
         if not path.exists():
             raise FileNotFoundError(f"Exclusion file not found: {filepath}")
 
-        mapping: Dict[str, str] = {}
+        mapping: dict[str, str] = {}
         with open(path) as fh:
             reader = csv.reader(fh, delimiter=delimiter)
             if has_header:
@@ -118,9 +117,9 @@ class CohortFilter:
     def apply(
         self,
         cohort_path: str,
-        exclusion_paths: Optional[List[str]] = None,
-        exclusion_set: Optional[Set[str]] = None,
-        output_path: Optional[str] = None,
+        exclusion_paths: list[str] | None = None,
+        exclusion_set: set[str] | None = None,
+        output_path: str | None = None,
     ) -> FilterReport:
         """
         Apply exclusion filtering to a cohort sample list.
@@ -146,13 +145,13 @@ class CohortFilter:
             raise FileNotFoundError(f"Cohort file not found: {cohort_path}")
 
         # Build combined exclusion set
-        to_exclude: Set[str] = set(exclusion_set) if exclusion_set else set()
+        to_exclude: set[str] = set(exclusion_set) if exclusion_set else set()
         if exclusion_paths:
             for ep in exclusion_paths:
                 to_exclude |= self.load_exclusion_set(ep)
 
         # Read original cohort
-        original_ids: List[str] = []
+        original_ids: list[str] = []
         with open(cohort) as fh:
             for line in fh:
                 parts = line.strip().split()
