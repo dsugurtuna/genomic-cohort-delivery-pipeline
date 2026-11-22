@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""
+Delivery Pipeline Orchestrator
+===============================
+
+Coordinates the complete end-to-end workflow:
+
+  1. Filter the cohort (remove exclusions)
+  2. Extract and merge genotypes across batches
+  3. Generate a delivery manifest with checksums
+  4. Transfer the package to the researcher staging area
+
+Author: Ugur Tuna
+"""
+
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+
+from cohort_delivery.filter import CohortFilter, FilterReport
+from cohort_delivery.manifest import DeliveryManifest, ManifestGenerator
+from cohort_delivery.merge import GenotypeMerger, MergeReport
+from cohort_delivery.transfer import SecureTransfer, TransferReport
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PipelineConfig:
+    """Configuration for an end-to-end delivery run."""
+
+    project_id: str = "PROJ001"
+    cohort_file: str = ""
+    exclusion_files: list[str] | None = None
+    batch_prefixes: list[str] | None = None
+    work_dir: str = "work"
+    delivery_dir: str = "delivery"
+    staging_root: str = "staging"
+    plink_exec: str = "plink"
+    convert_to_vcf: bool = True
+    transfer_method: str = "rsync"
+
+
+@dataclass
+class PipelineResult:
+    """Aggregated output of the full pipeline."""
+
+    filter_report: FilterReport | None = None
+    merge_report: MergeReport | None = None
+    manifest: DeliveryManifest | None = None
+    transfer_report: TransferReport | None = None
+
+
+class DeliveryPipeline:
+    """
+    Orchestrates the complete cohort delivery workflow.
+
+    Example::
+
+        config = PipelineConfig(
+            project_id="STUDY-A",
+            cohort_file="cohort_all.txt",
+            exclusion_files=["exclusions.csv"],
+            batch_prefixes=["batch_01", "batch_02"],
+        )
+        pipeline = DeliveryPipeline()
+        result = pipeline.run(config)
+    """
+
+    def run(self, config: PipelineConfig) -> PipelineResult:
+        """
+        Execute the full delivery pipeline.
+
+        Parameters
+        ----------
+        config : PipelineConfig
+
+        Returns
+        -------
+        PipelineResult
+        """
+        result = PipelineResult()
+        wd = Path(config.work_dir)
+        wd.mkdir(parents=True, exist_ok=True)
+        dd = Path(config.delivery_dir)
+        dd.mkdir(parents=True, exist_ok=True)
+
+        # Step 1: Filter
+        logger.info("Step 1: Filtering cohort for project %s", config.project_id)
+        flt = CohortFilter()
+        filtered_path = str(wd / "cohort_filtered.txt")
+        result.filter_report = flt.apply(
+            cohort_path=config.cohort_file,
+            exclusion_paths=config.exclusion_files,
+            output_path=filtered_path,
+        )
+        logger.info(
+            "Filtered: %d -> %d samples",
+            result.filter_report.original_count,
+            result.filter_report.final_count,
+        )
+        if result.filter_report.final_count == 0:
+            raise ValueError("No samples left after exclusions; nothing to deliver.")
+
+        # Step 2: Merge
+        if config.batch_prefixes:
+            logger.info("Step 2: Merging %d batches", len(config.batch_prefixes))
+            merger = GenotypeMerger(plink_exec=config.plink_exec)
+            output_prefix = str(dd / f"{config.project_id}_final_genotypes")
+            result.merge_report = merger.merge(
+                batch_prefixes=config.batch_prefixes,
+                keep_list=filtered_path,
+                output_prefix=output_prefix,
+                work_dir=config.work_dir,
+                convert_to_vcf=config.convert_to_vcf,
+            )
+            logger.info(
+                "Merge complete: %d samples, %d variants, %d excluded for conflicts",
+                result.merge_report.final_sample_count,
+                result.merge_report.final_variant_count,
+                result.merge_report.conflict_snp_count,
+            )
+            if (
+                result.merge_report.final_sample_count
+                != result.filter_report.final_count
+            ):
+                logger.warning(
+                    "Requested %d samples but genotypes have %d; check IDs, batches.",
+                    result.filter_report.final_count,
+                    result.merge_report.final_sample_count,
+                )
+
+        # Step 3: Manifest
+        logger.info("Step 3: Generating delivery manifest")
+        gen = ManifestGenerator()
+        result.manifest = gen.generate(
+            delivery_dir=config.delivery_dir,
+            project_id=config.project_id,
+        )
+        gen.write_manifest(result.manifest, str(dd / "MANIFEST.tsv"))
+        counts = {"Samples_Requested": str(result.filter_report.final_count)}
+        if result.merge_report is not None:
+            counts["Samples_In_Genotypes"] = str(result.merge_report.final_sample_count)
+            counts["Variants"] = str(result.merge_report.final_variant_count)
+            counts["Variants_Excluded_Conflicts"] = str(
+                result.merge_report.conflict_snp_count
+            )
+        gen.write_status_summary(
+            result.manifest, str(dd / "STATUS_SUMMARY.tsv"), counts
+        )
+
+        # Step 4: Transfer
+        logger.info("Step 4: Transfer to staging and verify checksums")
+        xfer = SecureTransfer()
+        result.transfer_report = xfer.send(
+            source_dir=config.delivery_dir,
+            dest_root=config.staging_root,
+            project_id=config.project_id,
+            method=config.transfer_method,
+            manifest=result.manifest,
+        )
+        logger.info(
+            "Transfer complete: %d files, checksums verified=%s",
+            result.transfer_report.file_count,
+            result.transfer_report.verified,
+        )
+
+        return result
