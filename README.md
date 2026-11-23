@@ -6,7 +6,7 @@ Assemble a research cohort from multi-batch PLINK 1.9 genotype data: remove excl
 
 > **Note:** Independent open-source reference implementation inspired by biobank-scale clinical genomics workflows. Built from scratch on synthetic data; contains no employer code, proprietary tooling, or real participant data.
 
-**Where this fits:** part of a curated set of public clinical genomics and health-data reference architectures, alongside [hla-pipeline-manager](https://github.com/dsugurtuna/hla-pipeline-manager) (multi-batch SNP2HLA imputation orchestration and SHA-256 release verification) and [gut-reaction-platform](https://github.com/dsugurtuna/gut-reaction-platform) (clinical research platform reference architecture).
+**Where this fits:** part of a curated set of public clinical genomics and health-data reference architectures, alongside [hla-pipeline-manager](https://github.com/dsugurtuna/hla-pipeline-manager) (multi-batch SNP2HLA imputation orchestration and SHA-256 release verification) and [clinical-cohort-ai-platform](https://github.com/dsugurtuna/clinical-cohort-ai-platform) (clinical research platform reference architecture).
 
 ## The problem
 
@@ -167,7 +167,7 @@ See [docs/WHY.md](docs/WHY.md) for the reasoning behind the design, and
 
 ## Licence
 
-MIT is declared in `pyproject.toml`, but no licence file is included yet.
+MIT. See [LICENSE](LICENSE).
 
 ---
 
