@@ -1,6 +1,8 @@
 # Genomic Cohort Delivery Pipeline
 
-[![CI](https://github.com/dsugurtuna/genomic-cohort-delivery-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/dsugurtuna/genomic-cohort-delivery-pipeline/actions)
+[![CI](https://github.com/dsugurtuna/genomic-cohort-delivery-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/dsugurtuna/genomic-cohort-delivery-pipeline/actions/workflows/ci.yml)
+![Python 3.11 | 3.12](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
+![Licence: MIT](https://img.shields.io/badge/licence-MIT-green)
 
 Assemble a research cohort from multi-batch PLINK 1.9 genotype data: remove excluded participants, merge batches, handle allele conflicts, write a checksum manifest, and copy the package to a staging area with verification.
 
@@ -17,17 +19,24 @@ to be able to check that what arrived is what was sent.
 
 ## What this does
 
-1. **Filter** (`CohortFilter`): remove samples on exclusion lists from a cohort list. Works with
-   PLINK `FID IID` lines (matching on IID and keeping lines intact for `--keep`) and counts
-   removals by reason.
-2. **Merge** (`GenotypeMerger`): extract the cohort from each batch, merge with
-   `--merge-list`, and if PLINK writes a `-merge.missnp` file, exclude those variants from every
-   batch and merge again. Excluded variants are listed. Any other PLINK failure stops the run with
-   PLINK's own message. Converts the result to bgzipped VCF.
-3. **Manifest** (`ManifestGenerator`): size, MD5 and SHA-256 per file, plus a status summary with
-   requested and delivered sample counts. `verify()` checks a directory against a manifest.
-4. **Transfer** (`SecureTransfer`): copy (or rsync) into a new dated staging directory with
-   owner/group-only permissions, then verify every file's checksums at the destination.
+1. **Filter** (`CohortFilter`): remove samples on exclusion lists from a cohort list. Supports CSV,
+   TSV, and whitespace-delimited PLINK `FID IID` exclusion files, skips blank IDs, preserves lines
+   intact for `--keep`, and records `excluded_iids` and removal reasons.
+2. **Merge** (`GenotypeMerger`): extract the cohort from each batch (using collision-safe indexed
+   intermediate prefixes), merge with `--merge-list`, and if PLINK writes a `-merge.missnp` file,
+   exclude those variants from every batch and merge again. Excluded variants are listed in
+   `MergeReport` and written to `CONFLICT_VARIANTS.txt` in the delivery package. Any other PLINK
+   failure stops immediately with PLINK's own output. Converts the result to bgzipped VCF.
+3. **Governance gate** (`DeliveryPipeline`): fails closed if `batch_prefixes` is empty, if the merged
+   `.fam` is empty, or if any excluded or unrequested IID appears in the final merged `.fam`.
+4. **Manifest** (`ManifestGenerator`): computes size, MD5, and SHA-256 for payload files and
+   `STATUS_SUMMARY.tsv` (no unconditional `PASS` claim), writes `MANIFEST.tsv`, and provides
+   `read_manifest()` + `verify()` so a recipient can verify a package on disk.
+5. **Transfer** (`SecureTransfer`): copies top-level regular files via `copy` or `rsync` into a
+   new dated staging directory with `0640`/`0750` permissions, cleans up partial staging directories
+   on transfer failure, and verifies every file's checksums at the destination.
+6. **CLI** (`cohort-delivery`): `cohort-delivery run` (from a JSON config and/or flags) and
+   `cohort-delivery verify <dir>` to verify a delivered package against `MANIFEST.tsv`.
 
 ## Quickstart
 
@@ -50,7 +59,8 @@ Excluding 1 variants with conflicting alleles and re-merging.
 Cohort: 10 samples; removed 2 {'Withdrawal': 1, 'SexMismatch': 1}
 Merged: 8 samples, 3 variants
 Excluded for allele conflicts: ['rs9300001']
-Delivered 7 files; checksums verified: True
+Delivered 8 files; checksums verified: True
+  CONFLICT_VARIANTS.txt
   DEMO01_final_genotypes.bed
   DEMO01_final_genotypes.bim
   DEMO01_final_genotypes.fam
@@ -66,8 +76,7 @@ than silently merged.
 ### With real data (needs PLINK 1.9 and rsync)
 
 ```python
-from cohort_delivery import DeliveryPipeline
-from cohort_delivery.pipeline import PipelineConfig
+from cohort_delivery import DeliveryPipeline, PipelineConfig
 
 config = PipelineConfig(
     project_id="STUDY-A",
@@ -84,6 +93,13 @@ result = pipeline.run(config)
 print(f"Delivered {result.transfer_report.file_count} files")
 ```
 
+Or via the CLI:
+
+```bash
+cohort-delivery run --config pipeline.json
+cohort-delivery verify researcher_staging/STUDY-A_Delivery_20261127/
+```
+
 ### Individual modules
 
 ```python
@@ -94,10 +110,13 @@ flt = CohortFilter()
 report = flt.apply("cohort.txt", exclusion_paths=["exclusions.csv"], output_path="filtered.txt")
 print(f"{report.original_count} -> {report.final_count} samples")
 
-# Generate manifest
+# Generate and verify a manifest on disk
 gen = ManifestGenerator()
 manifest = gen.generate("delivery/", project_id="STUDY-A")
 gen.write_manifest(manifest, "delivery/MANIFEST.tsv")
+
+loaded = gen.read_manifest("delivery/MANIFEST.tsv")
+problems = gen.verify(loaded, "delivery/")
 ```
 
 ## How it works
@@ -112,8 +131,9 @@ flowchart LR
     M -->|missnp| R[Exclude conflicts,<br/>re-extract, merge]
     M -->|ok| V[VCF]
     R --> V
-    V --> MF[Manifest + status]
-    MF --> T[Copy to staging<br/>0640 / 0750]
+    V --> G[Post-merge IID gate]
+    G --> MF[Manifest + status]
+    MF --> T[Copy/rsync to staging<br/>0640 / 0750]
     T --> CK[Verify checksums]
 ```
 
@@ -121,19 +141,22 @@ flowchart LR
 
 - **Exclude conflicting variants, and say so.** Flipping strands automatically is only safe for
   non-palindromic SNPs and needs a reference; getting it wrong silently corrupts genotypes.
-  Excluding is conservative, and the excluded list goes into the report.
-- **Stop on any other PLINK failure.** The first version ignored non-zero exits without a
-  `.missnp` file and carried on with missing files. A delivery that half-worked is worse than one
+  Excluding is conservative, and the excluded list goes into `CONFLICT_VARIANTS.txt` and the
+  report.
+- **Stop on any other PLINK failure.** Naive shell wrappers often ignore non-zero exits without a
+  `.missnp` file and carry on with missing outputs. A delivery that half-worked is worse than one
   that stopped.
 - **Match on IID, keep lines intact.** PLINK 1.9 `--keep` expects `FID IID`. Reducing lines to one
-  column broke the keep list and matched exclusions against family IDs.
-- **No integrity verdict without a check.** The status file used to say `PASS` unconditionally.
-  Verification now happens at the destination against the manifest, and the result is reported
-  by the code that ran it.
+  column breaks the keep list and matches exclusions against family IDs.
+- **Fail-closed post-merge consent check.** After PLINK merges the batches, the pipeline verifies
+  that the output `.fam` is non-empty and contains zero excluded or unrequested participant IIDs.
+- **No integrity verdict without a check.** Traditional batch summaries often write `PASS`
+  unconditionally. Verification happens at the destination against `MANIFEST.tsv` (including
+  `STATUS_SUMMARY.tsv`), and the result is reported by the code that ran it.
 - **No access for "others" by default.** Genotype data should be readable by the owner and the
-  project group only. The old defaults gave read access to every user on the system.
+  project group only. Default system umasks often grant read access to every user on a shared host.
 - **Never deliver into an existing directory.** Re-running on the same day must not mix two
-  deliveries.
+  deliveries unless an explicit `delivery_tag` or `unique_run` timestamp is supplied.
 - **Standard library only in the package.** PLINK and rsync do the heavy lifting; Python
   orchestrates, checks and records.
 
@@ -145,15 +168,14 @@ flowchart LR
 - No sample or variant QC. Inputs are assumed to be QC'd batches.
 - "Transfer" is a local copy or rsync to a filesystem the pipeline can write to. External cross-organisation encryption (such as GPG or envelope encryption) is outside the scope of this package.
 - Exclusions only work if the exclusion lists are complete and use the same IDs as the genotype
-  files. The pipeline checks requested against delivered sample counts but cannot know about a
-  withdrawal that is not on a list.
+  files. The pipeline enforces post-merge disjointness against every provided exclusion list and
+  checks requested against delivered sample counts, but cannot know about a withdrawal that is not
+  on a list.
 
 ## Roadmap
 
 - Strand check against a reference panel before merging, with automatic flipping only for
   non-ambiguous SNPs.
-- A CLI with a config file, so a delivery is reproducible from one file.
-- Write the excluded-variant list into the delivery package.
 
 ## Development
 

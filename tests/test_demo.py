@@ -12,4 +12,5 @@ def test_demo_output(capsys):
     assert "Cohort: 10 samples; removed 2 {'Withdrawal': 1, 'SexMismatch': 1}" in out
     assert "Merged: 8 samples, 3 variants" in out
     assert "Excluded for allele conflicts: ['rs9300001']" in out
-    assert "Delivered 7 files; checksums verified: True" in out
+    assert "Delivered 8 files; checksums verified: True" in out
+    assert "  CONFLICT_VARIANTS.txt" in out

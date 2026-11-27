@@ -20,17 +20,20 @@ run with the relevant log lines.
 Author: Ugur Tuna
 """
 
+from __future__ import annotations
+
 import logging
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NoReturn
 
 logger = logging.getLogger(__name__)
 
 
 def _count_lines(path: Path) -> int:
-    with open(path) as fh:
+    with open(path, encoding="utf-8") as fh:
         return sum(1 for _ in fh)
 
 
@@ -70,6 +73,14 @@ class GenotypeMerger:
     def __init__(self, plink_exec: str = "plink"):
         self.plink_exec = plink_exec
 
+    @staticmethod
+    def _raise_plink_error(
+        cmd: list[str], proc: subprocess.CompletedProcess[str]
+    ) -> NoReturn:
+        combined = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        tail = "\n".join(combined.splitlines()[-10:])
+        raise PlinkError(f"{' '.join(cmd)} exited {proc.returncode}:\n{tail}")
+
     def _run_plink(
         self, args: list[str], check: bool = True
     ) -> subprocess.CompletedProcess[str]:
@@ -78,8 +89,7 @@ class GenotypeMerger:
         logger.info("Running: %s", " ".join(cmd))
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if check and proc.returncode != 0:
-            tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-10:])
-            raise PlinkError(f"{' '.join(cmd)} exited {proc.returncode}:\n{tail}")
+            self._raise_plink_error(cmd, proc)
         return proc
 
     def extract_samples(
@@ -125,21 +135,19 @@ class GenotypeMerger:
 
     def _merge(
         self, prefixes: list[str], merge_list: Path, out: str, check: bool
-    ) -> bool:
-        merge_list.write_text("\n".join(prefixes[1:]) + "\n")
-        proc = self._run_plink(
-            [
-                "--bfile",
-                prefixes[0],
-                "--merge-list",
-                str(merge_list),
-                "--make-bed",
-                "--out",
-                out,
-            ],
-            check=check,
-        )
-        return proc.returncode == 0
+    ) -> tuple[list[str], subprocess.CompletedProcess[str]]:
+        merge_list.write_text("\n".join(prefixes[1:]) + "\n", encoding="utf-8")
+        args = [
+            "--bfile",
+            prefixes[0],
+            "--merge-list",
+            str(merge_list),
+            "--make-bed",
+            "--out",
+            out,
+        ]
+        proc = self._run_plink(args, check=check)
+        return [self.plink_exec, *args], proc
 
     def merge(
         self,
@@ -177,8 +185,12 @@ class GenotypeMerger:
         """
         if not batch_prefixes:
             raise ValueError("No batches to merge")
+        if not keep_list or not Path(keep_list).is_file():
+            raise FileNotFoundError(f"Keep list not found: {keep_list}")
+
         wd = Path(work_dir)
         wd.mkdir(parents=True, exist_ok=True)
+        Path(output_prefix).parent.mkdir(parents=True, exist_ok=True)
 
         report = MergeReport(batch_count=len(batch_prefixes))
 
@@ -187,16 +199,22 @@ class GenotypeMerger:
             self.extract_samples(batch_prefixes[0], keep_list, output_prefix)
         else:
             subset_prefixes = [
-                self.extract_samples(bp, keep_list, str(wd / f"{Path(bp).name}_subset"))
-                for bp in batch_prefixes
+                self.extract_samples(
+                    bp,
+                    keep_list,
+                    str(wd / f"batch_{idx:03d}_{Path(bp).name}_subset"),
+                )
+                for idx, bp in enumerate(batch_prefixes)
             ]
             first_attempt = str(wd / "merge_attempt")
-            ok = self._merge(
+            missnp = Path(f"{first_attempt}-merge.missnp")
+            missnp.unlink(missing_ok=True)
+
+            cmd, proc = self._merge(
                 subset_prefixes, wd / "merge_list.txt", first_attempt, False
             )
-            missnp = Path(f"{first_attempt}-merge.missnp")
 
-            if ok:
+            if proc.returncode == 0:
                 for ext in (".bed", ".bim", ".fam", ".log"):
                     src = Path(f"{first_attempt}{ext}")
                     if src.exists():
@@ -205,7 +223,7 @@ class GenotypeMerger:
                 report.conflict_snps = sorted(
                     {
                         line.strip()
-                        for line in missnp.read_text().splitlines()
+                        for line in missnp.read_text(encoding="utf-8").splitlines()
                         if line.strip()
                     }
                 )
@@ -219,25 +237,26 @@ class GenotypeMerger:
                     self.extract_samples(
                         bp,
                         keep_list,
-                        str(wd / f"{Path(bp).name}_corrected"),
+                        str(wd / f"batch_{idx:03d}_{Path(bp).name}_corrected"),
                         exclude_snps=str(missnp),
                     )
-                    for bp in batch_prefixes
+                    for idx, bp in enumerate(batch_prefixes)
                 ]
                 self._merge(
                     corrected, wd / "merge_list_corrected.txt", output_prefix, True
                 )
             else:
-                # Re-run with check=True to raise with PLINK's own message.
-                self._merge(subset_prefixes, wd / "merge_list.txt", first_attempt, True)
+                self._raise_plink_error(cmd, proc)
 
         report.output_prefix = output_prefix
         fam = Path(f"{output_prefix}.fam")
         bim = Path(f"{output_prefix}.bim")
-        if fam.exists():
-            report.final_sample_count = _count_lines(fam)
-        if bim.exists():
-            report.final_variant_count = _count_lines(bim)
+        if not fam.is_file() or not bim.is_file():
+            raise PlinkError(
+                f"Expected merged PLINK outputs missing at prefix: {output_prefix}"
+            )
+        report.final_sample_count = _count_lines(fam)
+        report.final_variant_count = _count_lines(bim)
 
         if convert_to_vcf:
             self._run_plink(

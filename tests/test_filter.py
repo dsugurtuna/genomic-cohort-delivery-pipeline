@@ -23,6 +23,56 @@ class TestCohortFilter:
         mapping = filter_instance.load_exclusion_set_with_reasons(str(excl))
         assert mapping == {"S001": "GenderMismatch", "S002": "Withdrawal"}
 
+    def test_blank_id_row_is_ignored(self, filter_instance, tmp_path):
+        cohort = tmp_path / "cohort.txt"
+        cohort.write_text("S001\nS002\nS003\n")
+        excl = tmp_path / "excl.csv"
+        excl.write_text("SampleID,Reason\n,Withdrawal\n  ,QC\nS002,\n")
+
+        ids = filter_instance.load_exclusion_set(str(excl))
+        assert ids == {"S002"}
+
+        report = filter_instance.apply(str(cohort), exclusion_paths=[str(excl)])
+        assert report.exclusion_count == 1
+        assert report.removed_count == 1
+        assert report.excluded_iids == {"S002"}
+        assert report.exclusion_reasons == {"unspecified": 1}
+
+    def test_whitespace_fid_iid_exclusion_file(self, filter_instance, tmp_path):
+        cohort = tmp_path / "cohort.txt"
+        cohort.write_text("FAM1 S001\nFAM2 S002\nFAM3 S003\n")
+        excl = tmp_path / "withdrawals.txt"
+        excl.write_text("FAM1 S001\nFAM3 S003\n")
+        out = tmp_path / "keep.txt"
+
+        report = filter_instance.apply(
+            str(cohort), exclusion_paths=[str(excl)], output_path=str(out)
+        )
+        assert report.exclusion_count == 2
+        assert report.removed_count == 2
+        assert report.excluded_iids == {"S001", "S003"}
+        assert out.read_text() == "FAM2 S002\n"
+
+    def test_whitespace_fid_iid_with_header(self, filter_instance, tmp_path):
+        cohort = tmp_path / "cohort.txt"
+        cohort.write_text("FAM1 S001\nFAM2 S002\n")
+        excl = tmp_path / "withdrawals.txt"
+        excl.write_text("FID IID\nFAM2 S002\n")
+
+        report = filter_instance.apply(str(cohort), exclusion_paths=[str(excl)])
+        assert report.excluded_iids == {"S002"}
+        assert report.final_count == 1
+
+    def test_tsv_exclusion_file(self, filter_instance, tmp_path):
+        cohort = tmp_path / "cohort.txt"
+        cohort.write_text("FAM1 S001\nFAM2 S002\n")
+        excl = tmp_path / "withdrawals.tsv"
+        excl.write_text("SampleID\tReason\nS002\tWithdrawal\n")
+
+        report = filter_instance.apply(str(cohort), exclusion_paths=[str(excl)])
+        assert report.excluded_iids == {"S002"}
+        assert report.exclusion_reasons == {"Withdrawal": 1}
+
     def test_apply_basic(self, filter_instance, tmp_path):
         cohort = tmp_path / "cohort.txt"
         cohort.write_text("S001\nS002\nS003\nS004\n")
@@ -38,6 +88,7 @@ class TestCohortFilter:
         )
         assert report.original_count == 4
         assert report.final_count == 2
+        assert report.excluded_iids == {"S001", "S002"}
         assert output.read_text().strip().split("\n") == ["S003", "S004"]
 
     def test_apply_with_set(self, filter_instance, tmp_path):
@@ -49,10 +100,15 @@ class TestCohortFilter:
             exclusion_set={"S002"},
         )
         assert report.final_count == 2
+        assert report.excluded_iids == {"S002"}
 
     def test_missing_cohort_raises(self, filter_instance):
         with pytest.raises(FileNotFoundError):
             filter_instance.apply(cohort_path="/nonexistent/file.txt")
+
+    def test_empty_cohort_path_raises(self, filter_instance):
+        with pytest.raises(FileNotFoundError):
+            filter_instance.apply(cohort_path="")
 
     def test_missing_exclusion_raises(self, filter_instance):
         with pytest.raises(FileNotFoundError):

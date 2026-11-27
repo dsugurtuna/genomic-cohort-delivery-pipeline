@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genomic-cohort-delivery-pipeline"
-version = "2.0.0"
+version = "0.1.0"
 description = "Filter, merge and package multi-batch PLINK genotype data for research delivery, with verified checksums."
 readme = "README.md"
 license = {text = "MIT"}
@@ -20,14 +20,25 @@ classifiers = [
 ]
 dependencies = []
 
+[project.urls]
+Homepage = "https://dsugurtuna.github.io/projects.html"
+Repository = "https://github.com/dsugurtuna/genomic-cohort-delivery-pipeline"
+
+[project.scripts]
+cohort-delivery = "cohort_delivery.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.16,<0.17", "mypy>=1.10"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+cohort_delivery = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 addopts = "--tb=short -q"
 
 [tool.ruff]
