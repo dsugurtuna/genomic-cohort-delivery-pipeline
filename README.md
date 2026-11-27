@@ -107,7 +107,9 @@ from cohort_delivery import CohortFilter, ManifestGenerator
 
 # Filter a cohort
 flt = CohortFilter()
-report = flt.apply("cohort.txt", exclusion_paths=["exclusions.csv"], output_path="filtered.txt")
+report = flt.apply(
+    "cohort.txt", exclusion_paths=["exclusions.csv"], output_path="filtered.txt"
+)
 print(f"{report.original_count} -> {report.final_count} samples")
 
 # Generate and verify a manifest on disk
